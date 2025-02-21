@@ -12,7 +12,7 @@ app.use(cors()); // Enable CORS for all routes
 
 // Cache system metrics to avoid recalculating frequently
 let cachedSystemMetrics = null;
-const CACHE_DURATION = 150000; // 1 minute cache
+const CACHE_DURATION = 50000; // 1 minute cache
 let lastCacheTime = 0;
 
 // Function for real latency measurement using multiple servers
