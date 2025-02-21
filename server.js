@@ -88,7 +88,7 @@ app.get('/network-metrics', async (req, res) => {
     try {
         // Initialize speed test with optimized parameters
         let speedtest = new FastSpeedtest({
-            token: "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm",
+            token: "yDQQYOcujXYc9iw8j3h2ecsFbkgQajI6FSveg",
             verbose: false,
             timeout: 5000,  // Reduced timeout
             https: true,
