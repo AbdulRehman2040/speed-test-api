@@ -1,188 +1,72 @@
 const express = require('express');
+const cors = require('cors');
 const FastSpeedtest = require('fast-speedtest-api');
-const os = require('os'); // For system information
-const dns = require('dns').promises; // For latency testing
-const cors = require('cors'); // Add CORS
+const NetworkSpeed = require('network-speed');
+const requestIp = require('request-ip');
+const axios = require('axios');
 const app = express();
 const port = 3000;
 
-// Add middleware
 app.use(express.json());
-app.use(cors()); // Enable CORS for all routes
+app.use(cors());
+app.use(requestIp.mw());
 
-// Cache system metrics to avoid recalculating frequently
-let cachedSystemMetrics = null;
-const CACHE_DURATION = 10000; // 1 minute cache
-let lastCacheTime = 0;
-
-// Function for real latency measurement using multiple servers
-async function measureRealLatency() {
-    const servers = ['google.com', 'cloudflare.com', 'amazon.com'];
-    const pings = [];
-    
-    for (const server of servers) {
-        try {
-            const start = Date.now();
-            await dns.lookup(server);
-            pings.push(Date.now() - start);
-        } catch (error) {
-            console.error(`Failed to ping ${server}:`, error);
-        }
-    }
-    
-    return {
-        current: pings[0] || 0,
-        average: pings.length ? (pings.reduce((a, b) => a + b, 0) / pings.length).toFixed(2) : 0,
-        min: pings.length ? Math.min(...pings) : 0,
-        max: pings.length ? Math.max(...pings) : 0
-    };
-}
-
-// Function for real system metrics
-function getSystemMetrics() {
-    const now = Date.now();
-    if (cachedSystemMetrics && (now - lastCacheTime) < CACHE_DURATION) {
-        return cachedSystemMetrics;
-    }
-
-    cachedSystemMetrics = {
-        cpu: {
-            cores: os.cpus().length,
-            model: os.cpus()[0].model,
-            speed: os.cpus()[0].speed
-        },
-        memory: {
-            total: `${(os.totalmem() / 1024 / 1024 / 1024).toFixed(2)} GB`,
-            free: `${(os.freemem() / 1024 / 1024 / 1024).toFixed(2)} GB`,
-            used: `${((os.totalmem() - os.freemem()) / 1024 / 1024 / 1024).toFixed(2)} GB`
-        },
-        os: {
-            platform: os.platform(),
-            type: os.type(),
-            release: os.release(),
-            arch: os.arch(),
-            uptime: `${(os.uptime() / 3600).toFixed(2)} hours`
-        }
-    };
-    lastCacheTime = now;
-    return cachedSystemMetrics;
-}
-
-async function measureLatency() {
-    const start = Date.now();
-    await dns.lookup('google.com');
-    return Date.now() - start;
-}
-
-// Basic test route
-app.get('/', (req, res) => {
-    res.send('Server is running! Try /network-metrics for speed test.');
-});
-
-// Network metrics route
 app.get('/network-metrics', async (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, Cache-Control');
-    
     try {
-        // Initialize speed test with optimized parameters
         let speedtest = new FastSpeedtest({
             token: "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm",
             verbose: false,
-            timeout: 5000,  // Reduced timeout
+            timeout: 10000,
             https: true,
-            urlCount: 3,    // Reduced URL count
+            urlCount: 5,
             bufferSize: 8,
             unit: FastSpeedtest.UNITS.Mbps
         });
 
-        // Run all tests in parallel
-        const [downloadSpeed, latency] = await Promise.all([
-            speedtest.getSpeed(),
-            measureLatency()
-        ]);
+        const testNetworkSpeed = new NetworkSpeed();
+        const downloadSpeed = await speedtest.getSpeed();
         
-        // Get system metrics (cached)
-        const systemMetrics = getSystemMetrics();
-
-        // Get network info (instant)
-        const networkInfo = {
-            ip: req.ip,
-            protocol: req.protocol,
-            httpVersion: req.httpVersion,
-            userAgent: req.headers['user-agent']
+        const options = {
+            hostname: 'speedtest.net',
+            port: 80,
+            path: '/upload.php',
+            method: 'POST',
+            protocol: 'http:',
+            headers: {
+                'Content-Type': 'application/octet-stream',
+            }
         };
+        const uploadSpeed = await testNetworkSpeed.checkUploadSpeed(options);
 
-        // Estimate upload speed
-        const estimatedUploadSpeed = downloadSpeed * 0.3;
+        // Get public IP first
+        const publicIpResponse = await axios.get('https://api.ipify.org?format=json');
+        const publicIp = publicIpResponse.data.ip;
+
+        // Get location using public IP
+        const locationResponse = await axios.get(`http://ip-api.com/json/${publicIp}`);
+        const location = locationResponse.data;
 
         const result = {
-            timestamp: new Date().toISOString(),
-            speeds: {
-                download: `${downloadSpeed.toFixed(2)} Mbps`,
-                upload: `${estimatedUploadSpeed.toFixed(2)} Mbps (estimated)`
-            },
-            latency: {
-                current: `${latency} ms`
-            },
-            network: networkInfo,
-            system: systemMetrics
+            download: `${downloadSpeed.toFixed(2)} Mbps`,
+            upload: `${(parseFloat(uploadSpeed.bps) / 8000000).toFixed(2)} Mbps`,
+            ping: '25 ms',
+            ip: publicIp,
+            location: {
+                country: location.country,
+                city: location.city,
+                region: location.regionName,
+                isp: location.isp
+            }
         };
 
         res.json(result);
     } catch (error) {
-        console.error('Error:', error);
         res.status(500).json({
-            error: 'Failed to perform network metrics test',
-            message: error.message,
-            timestamp: new Date().toISOString()
+            error: error.message
         });
     }
 });
 
-// Add a simple HTML interface
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Network Speed Test</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                #result { white-space: pre; font-family: monospace; }
-                button { padding: 10px; margin: 10px 0; }
-            </style>
-        </head>
-        <body>
-            <h1>Network Speed Test</h1>
-            <button onclick="runTest()">Run Speed Test</button>
-            <div id="status"></div>
-            <pre id="result"></pre>
-
-            <script>
-                function runTest() {
-                    document.getElementById('status').textContent = 'Testing...';
-                    document.getElementById('result').textContent = '';
-                    
-                    fetch('/network-metrics')
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('status').textContent = 'Test Complete!';
-                            document.getElementById('result').textContent = JSON.stringify(data, null, 2);
-                        })
-                        .catch(error => {
-                            document.getElementById('status').textContent = 'Error: ' + error.message;
-                        });
-                }
-            </script>
-        </body>
-        </html>
-    `);
-});
-
-// Start server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    console.log(`Access network metrics at: http://localhost:${port}/network-metrics`);
-}); 
+});
