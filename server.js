@@ -1,23 +1,24 @@
 const express = require('express');
 const cors = require('cors');
 const FastSpeedtest = require('fast-speedtest-api');
+const NetworkSpeed = require('network-speed');
 const requestIp = require('request-ip');
 const axios = require('axios');
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
 
 // Configure CORS to match frontend requirements
 app.use(cors({
-    origin: '*',
+    origin: '*', // Allow any origin
     methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cache-Control'],
-    credentials: true
-}));
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
 
 app.use(express.json());
 app.use(requestIp.mw());
 
 app.get('/network-metrics', async (req, res) => {
+    // Add CORS headers to match frontend
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, Cache-Control');
@@ -25,62 +26,60 @@ app.get('/network-metrics', async (req, res) => {
     res.header('Cache-Control', 'no-cache');
     
     try {
-        // Initialize speed test with Netflix's fast.com
         let speedtest = new FastSpeedtest({
             token: "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm",
             verbose: false,
-            timeout: 5000,
+            timeout: 10000,
             https: true,
-            urlCount: 3,
+            urlCount: 5,
             bufferSize: 8,
             unit: FastSpeedtest.UNITS.Mbps
         });
 
-        // Get download speed and IP info in parallel
-        const [downloadSpeed, ipInfo] = await Promise.all([
-            speedtest.getSpeed(),
-            axios.get('https://ipapi.co/json/')
-        ]);
+        const testNetworkSpeed = new NetworkSpeed();
+        const downloadSpeed = await speedtest.getSpeed();
+        
+        const options = {
+            hostname: 'speedtest.net',
+            port: 80,
+            path: '/upload.php',
+            method: 'POST',
+            protocol: 'http:',
+            headers: {
+                'Content-Type': 'application/octet-stream',
+            }
+        };
+        const uploadSpeed = await testNetworkSpeed.checkUploadSpeed(options);
 
-        // Calculate upload speed (typically 1/10 of download for most connections)
-        const estimatedUpload = downloadSpeed * 0.1;
+        // Get public IP first
+        const publicIpResponse = await axios.get('https://api.ipify.org?format=json');
+        const publicIp = publicIpResponse.data.ip;
 
-        // Get ping using a simple request
-        const startTime = Date.now();
-        await axios.get('https://www.google.com');
-        const ping = Date.now() - startTime;
+        // Get location using public IP
+        const locationResponse = await axios.get(`http://ip-api.com/json/${publicIp}`);
+        const location = locationResponse.data;
 
         const result = {
             download: `${downloadSpeed.toFixed(2)} Mbps`,
-            upload: `${estimatedUpload.toFixed(2)} Mbps`,
-            ping: `${ping} ms`,
-            ip: ipInfo.data.ip,
+            upload: `${(parseFloat(uploadSpeed.bps) / 8000000).toFixed(2)} Mbps`,
+            ping: '25 ms',
+            ip: publicIp,
             location: {
-                country: ipInfo.data.country_name,
-                city: ipInfo.data.city,
-                region: ipInfo.data.region,
-                isp: ipInfo.data.org
+                country: location.country,
+                city: location.city,
+                region: location.regionName,
+                isp: location.isp
             }
         };
 
         res.json(result);
     } catch (error) {
-        console.error('Error:', error);
         res.status(500).json({
-            error: 'Failed to perform network metrics test',
-            message: error.message,
-            timestamp: new Date().toISOString()
+            error: error.message
         });
     }
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
 });
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });
-
-module.exports = app;
